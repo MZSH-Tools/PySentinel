@@ -1,20 +1,22 @@
 from __future__ import annotations
 import sys
 from pathlib import Path
-from typing import List
 
-from PySide6.QtCore import Qt, Slot, QPoint
+from PySide6.QtCore    import Qt, Slot, QPoint
 from PySide6.QtWidgets import (
-    QWidget, QListWidget, QListWidgetItem, QPushButton, QLineEdit, QSpinBox,
-    QFileDialog, QPlainTextEdit, QFormLayout, QHBoxLayout, QVBoxLayout,
-    QSplitter, QLabel, QInputDialog, QMenu, QMessageBox, QApplication
+    QWidget, QListWidgetItem, QPushButton, QLineEdit, QSpinBox, QFileDialog,
+    QPlainTextEdit, QFormLayout, QHBoxLayout, QVBoxLayout, QSplitter, QLabel,
+    QInputDialog, QMenu, QMessageBox, QApplication
 )
 
+# 项目根加入 sys.path
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-from Source.Logic.TargetEntry   import TargetEntry
-from Source.Logic.ConfigManager import ConfigManager
-from Source.Logic.ExportWorker  import ExportWorker
+# 自定义安全拖拽列表
+from Source.UI.Widgets.SafeDragList import SafeDragList
+from Source.Logic.TargetEntry        import TargetEntry
+from Source.Logic.ConfigManager      import ConfigManager
+from Source.Logic.ExportWorker       import ExportWorker
 
 
 class MainWindow(QWidget):
@@ -29,8 +31,7 @@ class MainWindow(QWidget):
     # ---------- UI ----------
     def InitUi(self):
         # 左侧列表
-        self.TargetList = QListWidget(self)
-        self.TargetList.setDragDropMode(QListWidget.InternalMove)
+        self.TargetList = SafeDragList(self)
         self.TargetList.setContextMenuPolicy(Qt.CustomContextMenu)
         self.TargetList.customContextMenuRequested.connect(self.ShowContextMenu)
         self.TargetList.itemSelectionChanged.connect(self.OnSelectTarget)
@@ -47,7 +48,7 @@ class MainWindow(QWidget):
         leftWidget = QWidget(self)
         leftWidget.setLayout(leftLayout)
 
-        # 右侧配置
+        # 右侧配置面板
         self.LineEditFile = QLineEdit(self)
         self.LineEditFile.setReadOnly(True)
         self.BtnBrowseFile = QPushButton("…", self)
@@ -58,7 +59,7 @@ class MainWindow(QWidget):
         self.SpinMinutes.valueChanged.connect(self.OnMinutesChanged)
 
         form = QFormLayout()
-        form.addRow("目标文件：", self.MakeRow(self.LineEditFile, self.BtnBrowseFile))
+        form.addRow("目标文件：", self._make_row(self.LineEditFile, self.BtnBrowseFile))
         form.addRow("激活码有效期（分钟）：", self.SpinMinutes)
         self.RightPanel = QWidget(self)
         self.RightPanel.setLayout(form)
@@ -68,7 +69,7 @@ class MainWindow(QWidget):
         splitter.addWidget(self.RightPanel)
         splitter.setStretchFactor(1, 1)
 
-        # 中层：导出
+        # 导出设置
         self.LineEditExport = QLineEdit(self)
         self.LineEditExport.setReadOnly(True)
         self.LineEditExport.textChanged.connect(self.UpdateExportButtonState)
@@ -79,7 +80,7 @@ class MainWindow(QWidget):
         self.BtnExport = QPushButton("开始导出", self)
         self.BtnExport.clicked.connect(self.OnExportClicked)
 
-        exportRow = self.MakeRow(self.LineEditExport, self.BtnBrowseExport)
+        exportRow = self._make_row(self.LineEditExport, self.BtnBrowseExport)
         exportLayout = QFormLayout()
         exportLayout.addRow("导出目录：", exportRow)
         btnRow = QHBoxLayout()
@@ -90,7 +91,7 @@ class MainWindow(QWidget):
         exportWidget = QWidget(self)
         exportWidget.setLayout(exportLayout)
 
-        # --- 状态栏 + 激活码框 ---
+        # 状态 + 激活码框
         self.LabelStatus = QLabel("", self)
         self.LabelStatus.setStyleSheet("color:#007acc")
 
@@ -117,7 +118,7 @@ class MainWindow(QWidget):
         self.EnableRightPanel(False)
 
     # ---------- 列表辅助 ----------
-    def MakeRow(self, *widgets):
+    def _make_row(self, *widgets):
         h = QHBoxLayout()
         for w in widgets:
             h.addWidget(w, 1 if isinstance(w, QLineEdit) else 0)
@@ -125,19 +126,37 @@ class MainWindow(QWidget):
         container.setLayout(h)
         return container
 
+    def _name_exists(self, name: str, exclude_item: QListWidgetItem | None = None) -> bool:
+        for i in range(self.TargetList.count()):
+            it = self.TargetList.item(i)
+            if it is exclude_item:
+                continue
+            if it.text() == name:
+                return True
+        return False
+
     # ---------- 目标操作 ----------
     @Slot()
     def AddTarget(self):
         name, ok = QInputDialog.getText(self, "新建目标", "名称：")
-        if ok and name:
-            item = QListWidgetItem(name, self.TargetList)
-            item.setData(Qt.UserRole, TargetEntry(name))
-            item.setFlags(item.flags() | Qt.ItemIsEditable | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled)
-            self.TargetList.setCurrentItem(item)
-            self.SaveConfig()
+        if not ok or not name:
+            return
+        if self._name_exists(name):
+            QMessageBox.warning(self, "重名", f"已存在名称“{name}”，请更换。")
+            return
+        item = QListWidgetItem(name, self.TargetList)
+        item.setData(Qt.UserRole, TargetEntry(name))
+        item.setFlags(item.flags() | Qt.ItemIsEditable | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled)
+        self.TargetList.setCurrentItem(item)
+        self.SaveConfig()
 
     def OnItemRenamed(self, item: QListWidgetItem):
-        item.data(Qt.UserRole).Name = item.text()
+        newName = item.text()
+        if self._name_exists(newName, exclude_item=item):
+            QMessageBox.warning(self, "重名", f"已存在名称“{newName}”。")
+            item.setText(item.data(Qt.UserRole).Name)  # 还原
+            return
+        item.data(Qt.UserRole).Name = newName
         self.SaveConfig()
 
     def ShowContextMenu(self, pos: QPoint):
@@ -209,19 +228,17 @@ class MainWindow(QWidget):
 
     @Slot()
     def OnExportClicked(self):
-        if self.ExportWorker:               # 打断导出
+        if self.ExportWorker:           # 打断导出
             self.ExportWorker.Interrupt()
             return
 
         exportDir = self.LineEditExport.text().strip()
-        targets = [it.data(Qt.UserRole) for it in self.TargetList.selectedItems()]
+        targets = [it.data(Qt.UserRole) for it in self.TargetList.selectedItems() if it.data(Qt.UserRole).Path]
         if not targets:
-            QMessageBox.information(self, "提示", "请在列表中选择要导出的目标")
+            QMessageBox.information(self, "提示", "请选择已配置文件的目标")
             return
 
-        # 清空旧激活码框
         self.ActivationBox.clear()
-
         self.BtnExport.setText("打断导出")
         self.ExportWorker = ExportWorker(targets, Path(exportDir), self.Log, self.ExportFinished)
         self.ExportWorker.start()
@@ -239,8 +256,9 @@ class MainWindow(QWidget):
             self.LabelStatus.setText(msg)
 
     def CopyActivation(self):
-        if self.ActivationBox.toPlainText():
-            QApplication.clipboard().setText(self.ActivationBox.toPlainText())
+        txt = self.ActivationBox.toPlainText().strip()
+        if txt:
+            QApplication.clipboard().setText(txt)
 
     # ---------- 工具 ----------
     def EnableRightPanel(self, enabled: bool):
@@ -256,14 +274,13 @@ class MainWindow(QWidget):
         cfg = ConfigManager.Load()
         for t in cfg["targets"]:
             entry = TargetEntry.FromDict(t)
-            item  = QListWidgetItem(entry.Name, self.TargetList)
+            item = QListWidgetItem(entry.Name, self.TargetList)
             item.setData(Qt.UserRole, entry)
             item.setFlags(item.flags() | Qt.ItemIsEditable | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled)
         self.LineEditExport.setText(cfg.get("exportDir", ""))
 
     def SaveConfig(self):
-        targets = [self.TargetList.item(i).data(Qt.UserRole)
-                   for i in range(self.TargetList.count())]
+        targets = [self.TargetList.item(i).data(Qt.UserRole) for i in range(self.TargetList.count())]
         ConfigManager.Save(targets, self.LineEditExport.text().strip())
 
     def closeEvent(self, event):
