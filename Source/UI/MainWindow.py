@@ -154,14 +154,16 @@ class MainWindow(QWidget):
         self.LineEditFile.setText(entry.Path)
         self.SpinMinutes.setValue(entry.Minutes)
         self.EnableRightPanel(True)
+        self.UpdateExportButtonState()
 
-    # ---------- 字段变化 ----------
+        # ---------- 字段变化 ----------
     @Slot()
     def BrowseFile(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择要加壳的文件")
         if path:
             self.LineEditFile.setText(path)
             self.UpdateEntry("Path", path)
+            self.UpdateExportButtonState()
 
     @Slot(int)
     def OnMinutesChanged(self, minutes: int):
@@ -183,12 +185,22 @@ class MainWindow(QWidget):
             self.Log(f"导出目录设置为：{path}")
 
     def UpdateExportButtonState(self):
+        # 导出过程中始终可点击（用于打断）
         if self.ExportWorker:
             self.BtnExport.setEnabled(True)
             return
-        hasTargets = bool(self.TargetList.selectedItems())
-        hasExport  = bool(self.LineEditExport.text().strip())
-        self.BtnExport.setEnabled(hasTargets and hasExport)
+
+        exportReady = bool(self.LineEditExport.text().strip())
+
+        # 至少一个选中目标且已设置文件路径
+        readyTarget = False
+        for item in self.TargetList.selectedItems():
+            entry: TargetEntry = item.data(Qt.UserRole)
+            if entry.Path:
+                readyTarget = True
+                break
+
+        self.BtnExport.setEnabled(readyTarget and exportReady)
 
     @Slot()
     def OnExportClicked(self):
