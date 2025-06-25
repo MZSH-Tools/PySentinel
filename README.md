@@ -16,7 +16,7 @@ pip install -r requirements.txt       # PySide6 + PyInstaller + pycryptodomex
 
 ```bash
 # 仅第一次或换电脑时操作
-pyinstaller -F Main.py --name PySentinelBuilder --add-data "Source;Source"
+pyinstaller -F -w Main.py --name PySentinelBuilder --add-data "Source;Source"
 # dist/PySentinelBuilder.exe 即是加壳工具
 ```
 
