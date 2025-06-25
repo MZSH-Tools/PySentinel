@@ -1,7 +1,6 @@
 from __future__ import annotations
 import sys, time
 from pathlib import Path
-from typing import List
 
 from PySide6.QtCore import Qt, Slot, QPoint
 from PySide6.QtWidgets import (
@@ -12,9 +11,9 @@ from PySide6.QtWidgets import (
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-from Source.Logic.TargetEntry import TargetEntry
+from Source.Logic.TargetEntry   import TargetEntry
 from Source.Logic.ConfigManager import ConfigManager
-from Source.Logic.ExportWorker import ExportWorker
+from Source.Logic.ExportWorker  import ExportWorker
 
 
 class MainWindow(QWidget):
@@ -100,7 +99,7 @@ class MainWindow(QWidget):
         vbox.addWidget(QLabel("日志：", self))
         vbox.addWidget(self.TextLog, 1)
 
-        self.EnableRightPanel(False)   # ← 初始化禁用右侧控件
+        self.EnableRightPanel(False)
 
     # ---------- 列表辅助 ----------
     def MakeRow(self, *widgets):
@@ -111,7 +110,7 @@ class MainWindow(QWidget):
         container.setLayout(h)
         return container
 
-    # ---------- 目标列表 ----------
+    # ---------- 目标操作 ----------
     @Slot()
     def AddTarget(self):
         name, ok = QInputDialog.getText(self, "新建目标", "名称：")
@@ -120,11 +119,13 @@ class MainWindow(QWidget):
             item.setData(Qt.UserRole, TargetEntry(name))
             item.setFlags(item.flags() | Qt.ItemIsEditable | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled)
             self.TargetList.setCurrentItem(item)
+            self.SaveConfig()          # ★ 即时保存
 
     def OnItemRenamed(self, item: QListWidgetItem):
         entry: TargetEntry = item.data(Qt.UserRole)
         entry.Name = item.text()
         self.UpdateExportButtonState()
+        self.SaveConfig()              # ★ 即时保存
 
     def ShowContextMenu(self, pos: QPoint):
         item = self.TargetList.itemAt(pos)
@@ -141,6 +142,7 @@ class MainWindow(QWidget):
             self.EnableRightPanel(False)
             self.ClearRightPanel()
             self.UpdateExportButtonState()
+            self.SaveConfig()          # ★ 即时保存删除
 
     def OnSelectTarget(self):
         item = self.TargetList.currentItem()
@@ -153,7 +155,7 @@ class MainWindow(QWidget):
         self.SpinMinutes.setValue(entry.Minutes)
         self.EnableRightPanel(True)
 
-    # ---------- 右侧字段 ----------
+    # ---------- 字段变化 ----------
     @Slot()
     def BrowseFile(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择要加壳的文件")
@@ -170,6 +172,7 @@ class MainWindow(QWidget):
         if item:
             entry: TargetEntry = item.data(Qt.UserRole)
             setattr(entry, field, value)
+            self.SaveConfig()          # ★ 即时保存配置
 
     # ---------- 导出 ----------
     @Slot()
@@ -180,27 +183,23 @@ class MainWindow(QWidget):
             self.Log(f"导出目录设置为：{path}")
 
     def UpdateExportButtonState(self):
-        if self.ExportWorker:            # 导出进行中
+        if self.ExportWorker:
             self.BtnExport.setEnabled(True)
             return
-        hasTargets = self.TargetList.count() > 0
+        hasTargets = bool(self.TargetList.selectedItems())
         hasExport  = bool(self.LineEditExport.text().strip())
         self.BtnExport.setEnabled(hasTargets and hasExport)
 
     @Slot()
     def OnExportClicked(self):
-        if self.ExportWorker:            # 打断导出
+        if self.ExportWorker:
             self.ExportWorker.Interrupt()
             return
-
         exportDir = self.LineEditExport.text().strip()
-        # ★ 只取选中的条目
-        selectedItems = self.TargetList.selectedItems()
-        if not selectedItems:
+        targets = [item.data(Qt.UserRole) for item in self.TargetList.selectedItems()]
+        if not targets:
             QMessageBox.information(self, "提示", "请在列表中选择要导出的目标")
             return
-        targets = [item.data(Qt.UserRole) for item in selectedItems]
-
         self.BtnExport.setText("打断导出")
         self.ExportWorker = ExportWorker(targets, Path(exportDir), self.Log, self.ExportFinished)
         self.ExportWorker.start()
@@ -212,7 +211,6 @@ class MainWindow(QWidget):
 
     # ---------- 工具 ----------
     def EnableRightPanel(self, enabled: bool):
-        """统一启用/禁用右侧所有输入控件"""
         for w in (self.LineEditFile, self.BtnBrowseFile, self.SpinMinutes):
             w.setEnabled(enabled)
 
@@ -223,8 +221,7 @@ class MainWindow(QWidget):
     # ---------- 日志 ----------
     def Log(self, msg: str):
         self.TextLog.appendPlainText(msg)
-        self.TextLog.verticalScrollBar().setValue(
-            self.TextLog.verticalScrollBar().maximum())
+        self.TextLog.verticalScrollBar().setValue(self.TextLog.verticalScrollBar().maximum())
 
     # ---------- 配置 ----------
     def LoadConfig(self):
