@@ -1,26 +1,24 @@
 """
-批量加壳 & 打包单文件 exe（含 ProductId、激活码）
+批量加壳 & 单文件 exe（全自动密钥，公钥写进壳）
 """
 import hashlib, shutil, subprocess, sys, tempfile, time, threading
 from pathlib import Path
 from typing import Callable, List
 
+from Crypto.PublicKey import RSA
+
 from .TargetEntry import TargetEntry
 from .EncryptionUtils import EncryptFile, DeriveUserKey
 from .ActivationCode import Generate
 
-# ------------------------------ #
-RUNNER_TEMPLATE = Path("PayloadRunner.py")   # 固定模板
-# ------------------------------ #
+RUNNER_TEMPLATE = Path("PayloadRunner.py")   # 模板
 
 class ExportWorker(threading.Thread):
-    def __init__(
-            self,
-            targets: List[TargetEntry],
-            exportDir: Path,
-            logFunc: Callable[[str], None],
-            finishedCb: Callable[[bool], None],
-    ):
+    def __init__(self,
+                 targets: List[TargetEntry],
+                 exportDir: Path,
+                 logFunc: Callable[[str], None],
+                 finishedCb: Callable[[bool], None]):
         super().__init__(daemon=True)
         self.Targets = targets
         self.ExportDir = exportDir
@@ -28,7 +26,6 @@ class ExportWorker(threading.Thread):
         self.OnFinished = finishedCb
         self.InterruptFlag = False
 
-    # ---------- 主流程 ----------
     def run(self):
         interrupted = False
         tmpRoot = Path(tempfile.mkdtemp(prefix="psentinel_"))
@@ -45,29 +42,33 @@ class ExportWorker(threading.Thread):
                     self.Log(f"❌ 找不到文件：{src}")
                     continue
 
-                # 1) 生成 ProductId（12 hex）
-                productId = hashlib.sha256(
-                    f"{src.stat().st_mtime_ns}{time.time_ns()}".encode()
-                ).hexdigest()[:12]
+                # 1. 生成 ProductId
+                productId = hashlib.sha256(f"{src.stat().st_mtime_ns}{time.time_ns()}".encode()).hexdigest()[:12]
 
-                # 2) 生成激活码 & seed
+                # 2. 动态密钥对
+                rsaKey  = RSA.generate(2048)
+                privPem = rsaKey.export_key()
+                pubPem  = rsaKey.publickey().export_key()
+
+                # 3. 激活码
                 try:
-                    activation, seed = Generate(t.Minutes, productId)
+                    activation, seed = Generate(t.Minutes, productId, privPem)
                 except Exception as e:
                     self.Log(f"❌ 生成激活码失败：{e}")
                     continue
 
-                # 3) AES-GCM 加密载荷 -> tmp/encrypted_payload.dat
+                # 4. 加密载荷
                 encTmp = tmpRoot / "encrypted_payload.dat"
                 EncryptFile(src, DeriveUserKey(seed), encTmp)
 
-                # 4) 复制 Runner 模板 & 注入 ProductId
+                # 5. 生成 Runner 源码（注入 ProductId + 公钥）
                 runnerTmp = tmpRoot / f"Runner_{productId}.py"
-                runnerCode = RUNNER_TEMPLATE.read_text(encoding="utf-8")
-                runnerCode = runnerCode.replace("__PRODUCT_ID__", productId)
-                runnerTmp.write_text(runnerCode, encoding="utf-8")
+                code = RUNNER_TEMPLATE.read_text(encoding="utf-8")
+                code = code.replace("__PRODUCT_ID__", productId)
+                code = code.replace("__PUBLIC_KEY__", pubPem.decode())
+                runnerTmp.write_text(code, encoding="utf-8")
 
-                # 5) PyInstaller 单文件
+                # 6. PyInstaller 单文件
                 outExe = self.ExportDir / f"{t.Name}.exe"
                 cmd = [
                     sys.executable, "-m", "PyInstaller", "-F", str(runnerTmp),
@@ -78,7 +79,7 @@ class ExportWorker(threading.Thread):
                     "--specpath", str(tmpRoot / "spec"),
                     "--noconsole"
                 ]
-                self.Log(f"🔧 PyInstaller {t.Name} …")
+                self.Log(f"🔧 正在打包 {t.Name} …")
                 proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 if proc.returncode != 0:
                     self.Log(f"❌ 打包失败：\n{proc.stdout}")
@@ -90,10 +91,7 @@ class ExportWorker(threading.Thread):
         finally:
             shutil.rmtree(tmpRoot, ignore_errors=True)
 
-        if interrupted:
-            self.Log("⚠ 导出被用户中断")
-        else:
-            self.Log("全部任务完成")
+        self.Log("⚠ 导出被用户中断" if interrupted else "全部任务完成")
         self.OnFinished(interrupted)
 
     def Interrupt(self):
