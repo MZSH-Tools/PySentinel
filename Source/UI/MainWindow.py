@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, sys, time
+import sys, time
 from pathlib import Path
 from typing import List
 
@@ -34,6 +34,7 @@ class MainWindow(QWidget):
         self.TargetList.setContextMenuPolicy(Qt.CustomContextMenu)
         self.TargetList.customContextMenuRequested.connect(self.ShowContextMenu)
         self.TargetList.itemSelectionChanged.connect(self.OnSelectTarget)
+        self.TargetList.itemChanged.connect(self.OnItemRenamed)
         self.TargetList.model().rowsInserted.connect(lambda *_: self.UpdateExportButtonState())
         self.TargetList.model().rowsRemoved.connect(lambda *_: self.UpdateExportButtonState())
 
@@ -99,8 +100,9 @@ class MainWindow(QWidget):
         vbox.addWidget(QLabel("日志：", self))
         vbox.addWidget(self.TextLog, 1)
 
-        self.EnableRightPanel(False)
+        self.EnableRightPanel(False)   # ← 初始化禁用右侧控件
 
+    # ---------- 列表辅助 ----------
     def MakeRow(self, *widgets):
         h = QHBoxLayout()
         for w in widgets:
@@ -113,12 +115,16 @@ class MainWindow(QWidget):
     @Slot()
     def AddTarget(self):
         name, ok = QInputDialog.getText(self, "新建目标", "名称：")
-        if not ok or not name:
-            return
-        item = QListWidgetItem(name, self.TargetList)
-        item.setData(Qt.UserRole, TargetEntry(name))
-        item.setFlags(item.flags() | Qt.ItemIsEditable | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled)
-        self.TargetList.setCurrentItem(item)
+        if ok and name:
+            item = QListWidgetItem(name, self.TargetList)
+            item.setData(Qt.UserRole, TargetEntry(name))
+            item.setFlags(item.flags() | Qt.ItemIsEditable | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled)
+            self.TargetList.setCurrentItem(item)
+
+    def OnItemRenamed(self, item: QListWidgetItem):
+        entry: TargetEntry = item.data(Qt.UserRole)
+        entry.Name = item.text()
+        self.UpdateExportButtonState()
 
     def ShowContextMenu(self, pos: QPoint):
         item = self.TargetList.itemAt(pos)
@@ -147,14 +153,6 @@ class MainWindow(QWidget):
         self.SpinMinutes.setValue(entry.Minutes)
         self.EnableRightPanel(True)
 
-    def EnableRightPanel(self, enabled: bool):
-        for w in (self.LineEditFile, self.BtnBrowseFile, self.SpinMinutes):
-            w.setEnabled(enabled)
-
-    def ClearRightPanel(self):
-        self.LineEditFile.clear()
-        self.SpinMinutes.setValue(10)
-
     # ---------- 右侧字段 ----------
     @Slot()
     def BrowseFile(self):
@@ -169,10 +167,9 @@ class MainWindow(QWidget):
 
     def UpdateEntry(self, field: str, value):
         item = self.TargetList.currentItem()
-        if not item:
-            return
-        entry: TargetEntry = item.data(Qt.UserRole)
-        setattr(entry, field, value)
+        if item:
+            entry: TargetEntry = item.data(Qt.UserRole)
+            setattr(entry, field, value)
 
     # ---------- 导出 ----------
     @Slot()
@@ -183,26 +180,23 @@ class MainWindow(QWidget):
             self.Log(f"导出目录设置为：{path}")
 
     def UpdateExportButtonState(self):
-        if self.ExportWorker:  # 导出进行中 -> 始终可点击（用于打断）
+        if self.ExportWorker:            # 导出进行中
             self.BtnExport.setEnabled(True)
             return
         hasTargets = self.TargetList.count() > 0
-        hasExportDir = bool(self.LineEditExport.text().strip())
-        self.BtnExport.setEnabled(hasTargets and hasExportDir)
+        hasExport  = bool(self.LineEditExport.text().strip())
+        self.BtnExport.setEnabled(hasTargets and hasExport)
 
     @Slot()
     def OnExportClicked(self):
-        if self.ExportWorker:  # 中断导出
+        if self.ExportWorker:            # 打断导出
             self.ExportWorker.Interrupt()
             return
         exportDir = self.LineEditExport.text().strip()
-        targets: List[TargetEntry] = [
-            self.TargetList.item(i).data(Qt.UserRole) for i in range(self.TargetList.count())
-        ]
+        targets   = [self.TargetList.item(i).data(Qt.UserRole)
+                     for i in range(self.TargetList.count())]
         self.BtnExport.setText("打断导出")
-        self.ExportWorker = ExportWorker(
-            targets, Path(exportDir), self.Log, self.ExportFinished
-        )
+        self.ExportWorker = ExportWorker(targets, Path(exportDir), self.Log, self.ExportFinished)
         self.ExportWorker.start()
 
     def ExportFinished(self, interrupted: bool):
@@ -210,31 +204,37 @@ class MainWindow(QWidget):
         self.ExportWorker = None
         self.UpdateExportButtonState()
 
+    # ---------- 工具 ----------
+    def EnableRightPanel(self, enabled: bool):
+        """统一启用/禁用右侧所有输入控件"""
+        for w in (self.LineEditFile, self.BtnBrowseFile, self.SpinMinutes):
+            w.setEnabled(enabled)
+
+    def ClearRightPanel(self):
+        self.LineEditFile.clear()
+        self.SpinMinutes.setValue(10)
+
     # ---------- 日志 ----------
     def Log(self, msg: str):
         self.TextLog.appendPlainText(msg)
         self.TextLog.verticalScrollBar().setValue(
-            self.TextLog.verticalScrollBar().maximum()
-        )
+            self.TextLog.verticalScrollBar().maximum())
 
     # ---------- 配置 ----------
     def LoadConfig(self):
         cfg = ConfigManager.Load()
         for t in cfg["targets"]:
             entry = TargetEntry.FromDict(t)
-            item = QListWidgetItem(entry.Name, self.TargetList)
+            item  = QListWidgetItem(entry.Name, self.TargetList)
             item.setData(Qt.UserRole, entry)
             item.setFlags(item.flags() | Qt.ItemIsEditable | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled)
         self.LineEditExport.setText(cfg.get("exportDir", ""))
 
     def SaveConfig(self):
-        targets = [
-            self.TargetList.item(i).data(Qt.UserRole)
-            for i in range(self.TargetList.count())
-        ]
+        targets = [self.TargetList.item(i).data(Qt.UserRole)
+                   for i in range(self.TargetList.count())]
         ConfigManager.Save(targets, self.LineEditExport.text().strip())
 
-    # ---------- 关闭 ----------
     def closeEvent(self, event):
         self.SaveConfig()
         super().closeEvent(event)

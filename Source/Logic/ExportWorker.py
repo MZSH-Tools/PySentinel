@@ -80,7 +80,14 @@ class ExportWorker(threading.Thread):
                     "--noconsole"
                 ]
                 self.Log(f"🔧 正在打包 {t.Name} …")
-                proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                proc = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",   # 强制用 UTF-8 读输出
+                    errors="ignore"     # 跳过无法解码字节
+                )
                 if proc.returncode != 0:
                     self.Log(f"❌ 打包失败：\n{proc.stdout}")
                     continue
