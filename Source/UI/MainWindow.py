@@ -1,12 +1,13 @@
 from __future__ import annotations
-import sys, time
+import sys
 from pathlib import Path
+from typing import List
 
 from PySide6.QtCore import Qt, Slot, QPoint
 from PySide6.QtWidgets import (
     QWidget, QListWidget, QListWidgetItem, QPushButton, QLineEdit, QSpinBox,
     QFileDialog, QPlainTextEdit, QFormLayout, QHBoxLayout, QVBoxLayout,
-    QSplitter, QLabel, QInputDialog, QMenu, QMessageBox
+    QSplitter, QLabel, QInputDialog, QMenu, QMessageBox, QApplication
 )
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
@@ -89,15 +90,29 @@ class MainWindow(QWidget):
         exportWidget = QWidget(self)
         exportWidget.setLayout(exportLayout)
 
-        # 底层：日志
-        self.TextLog = QPlainTextEdit(self)
-        self.TextLog.setReadOnly(True)
+        # --- 状态栏 + 激活码框 ---
+        self.LabelStatus = QLabel("", self)
+        self.LabelStatus.setStyleSheet("color:#007acc")
 
+        self.ActivationBox = QPlainTextEdit(self)
+        self.ActivationBox.setReadOnly(True)
+        self.ActivationBox.setPlaceholderText("激活码将在此显示…")
+
+        self.BtnCopy = QPushButton("复制激活码", self)
+        self.BtnCopy.clicked.connect(self.CopyActivation)
+        copyRow = QHBoxLayout()
+        copyRow.addStretch()
+        copyRow.addWidget(self.BtnCopy)
+
+        # 主布局
         vbox = QVBoxLayout(self)
         vbox.addWidget(splitter, 3)
         vbox.addWidget(exportWidget)
-        vbox.addWidget(QLabel("日志：", self))
-        vbox.addWidget(self.TextLog, 1)
+        vbox.addWidget(QLabel("状态：", self))
+        vbox.addWidget(self.LabelStatus)
+        vbox.addWidget(QLabel("激活码：", self))
+        vbox.addWidget(self.ActivationBox, 1)
+        vbox.addLayout(copyRow)
 
         self.EnableRightPanel(False)
 
@@ -119,13 +134,11 @@ class MainWindow(QWidget):
             item.setData(Qt.UserRole, TargetEntry(name))
             item.setFlags(item.flags() | Qt.ItemIsEditable | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled)
             self.TargetList.setCurrentItem(item)
-            self.SaveConfig()          # ★ 即时保存
+            self.SaveConfig()
 
     def OnItemRenamed(self, item: QListWidgetItem):
-        entry: TargetEntry = item.data(Qt.UserRole)
-        entry.Name = item.text()
-        self.UpdateExportButtonState()
-        self.SaveConfig()              # ★ 即时保存
+        item.data(Qt.UserRole).Name = item.text()
+        self.SaveConfig()
 
     def ShowContextMenu(self, pos: QPoint):
         item = self.TargetList.itemAt(pos)
@@ -142,7 +155,7 @@ class MainWindow(QWidget):
             self.EnableRightPanel(False)
             self.ClearRightPanel()
             self.UpdateExportButtonState()
-            self.SaveConfig()          # ★ 即时保存删除
+            self.SaveConfig()
 
     def OnSelectTarget(self):
         item = self.TargetList.currentItem()
@@ -150,20 +163,19 @@ class MainWindow(QWidget):
             self.EnableRightPanel(False)
             self.ClearRightPanel()
             return
-        entry: TargetEntry = item.data(Qt.UserRole)
+        entry = item.data(Qt.UserRole)
         self.LineEditFile.setText(entry.Path)
         self.SpinMinutes.setValue(entry.Minutes)
         self.EnableRightPanel(True)
         self.UpdateExportButtonState()
 
-        # ---------- 字段变化 ----------
+    # ---------- 字段变化 ----------
     @Slot()
     def BrowseFile(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择要加壳的文件")
         if path:
             self.LineEditFile.setText(path)
             self.UpdateEntry("Path", path)
-            self.UpdateExportButtonState()
 
     @Slot(int)
     def OnMinutesChanged(self, minutes: int):
@@ -172,9 +184,9 @@ class MainWindow(QWidget):
     def UpdateEntry(self, field: str, value):
         item = self.TargetList.currentItem()
         if item:
-            entry: TargetEntry = item.data(Qt.UserRole)
-            setattr(entry, field, value)
-            self.SaveConfig()          # ★ 即时保存配置
+            setattr(item.data(Qt.UserRole), field, value)
+            self.SaveConfig()
+            self.UpdateExportButtonState()
 
     # ---------- 导出 ----------
     @Slot()
@@ -182,36 +194,34 @@ class MainWindow(QWidget):
         path = QFileDialog.getExistingDirectory(self, "选择导出目录")
         if path:
             self.LineEditExport.setText(path)
-            self.Log(f"导出目录设置为：{path}")
+            self.LabelStatus.setText(f"导出目录设置为：{path}")
 
     def UpdateExportButtonState(self):
-        # 导出过程中始终可点击（用于打断）
         if self.ExportWorker:
             self.BtnExport.setEnabled(True)
             return
 
         exportReady = bool(self.LineEditExport.text().strip())
-
-        # 至少一个选中目标且已设置文件路径
-        readyTarget = False
-        for item in self.TargetList.selectedItems():
-            entry: TargetEntry = item.data(Qt.UserRole)
-            if entry.Path:
-                readyTarget = True
-                break
-
+        readyTarget = any(
+            item.data(Qt.UserRole).Path for item in self.TargetList.selectedItems()
+        )
         self.BtnExport.setEnabled(readyTarget and exportReady)
 
     @Slot()
     def OnExportClicked(self):
-        if self.ExportWorker:
+        if self.ExportWorker:               # 打断导出
             self.ExportWorker.Interrupt()
             return
+
         exportDir = self.LineEditExport.text().strip()
-        targets = [item.data(Qt.UserRole) for item in self.TargetList.selectedItems()]
+        targets = [it.data(Qt.UserRole) for it in self.TargetList.selectedItems()]
         if not targets:
             QMessageBox.information(self, "提示", "请在列表中选择要导出的目标")
             return
+
+        # 清空旧激活码框
+        self.ActivationBox.clear()
+
         self.BtnExport.setText("打断导出")
         self.ExportWorker = ExportWorker(targets, Path(exportDir), self.Log, self.ExportFinished)
         self.ExportWorker.start()
@@ -221,6 +231,17 @@ class MainWindow(QWidget):
         self.ExportWorker = None
         self.UpdateExportButtonState()
 
+    # ---------- 状态 & 激活码 ----------
+    def Log(self, msg: str):
+        if msg.startswith("激活码："):
+            self.ActivationBox.appendPlainText(msg.split("：", 1)[1].strip())
+        else:
+            self.LabelStatus.setText(msg)
+
+    def CopyActivation(self):
+        if self.ActivationBox.toPlainText():
+            QApplication.clipboard().setText(self.ActivationBox.toPlainText())
+
     # ---------- 工具 ----------
     def EnableRightPanel(self, enabled: bool):
         for w in (self.LineEditFile, self.BtnBrowseFile, self.SpinMinutes):
@@ -229,11 +250,6 @@ class MainWindow(QWidget):
     def ClearRightPanel(self):
         self.LineEditFile.clear()
         self.SpinMinutes.setValue(10)
-
-    # ---------- 日志 ----------
-    def Log(self, msg: str):
-        self.TextLog.appendPlainText(msg)
-        self.TextLog.verticalScrollBar().setValue(self.TextLog.verticalScrollBar().maximum())
 
     # ---------- 配置 ----------
     def LoadConfig(self):
