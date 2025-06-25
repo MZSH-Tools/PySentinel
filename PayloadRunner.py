@@ -33,18 +33,22 @@ def prompt_activation_code() -> str | None:
 
 
 def _first_activation():
+    """首激活循环；用户可取消退出"""
     while True:
         code = prompt_activation_code()
-        if not code:
+        if code is None:                 # ← 用户点关闭/取消
+            sys.exit(0)
+
+        if not code.strip():             # ← 空输入重来
             continue
+
         try:
-            seed, prod = ActivationCode.Validate(code)
+            seed, prod = ActivationCode.Validate(code.strip())
             if prod != PRODUCT_ID:
                 raise ValueError("激活码与本软件不匹配")
             CreateLicense(seed, PRODUCT_ID)
-            return
+            return                       # 成功后回到 main
         except Exception as e:
-            # 控制台或 MessageBox 输出
             try:
                 import tkinter.messagebox as mb
                 mb.showerror("激活失败", str(e))
