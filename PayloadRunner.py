@@ -1,52 +1,86 @@
-"""
-终端用户执行壳  (单文件)
-__PRODUCT_ID__  和  __PUBLIC_KEY__  均由 Builder 替换
-"""
-import base64, importlib.resources, subprocess, tempfile, traceback
+import sys, traceback, tempfile, subprocess, base64, importlib.resources
 from pathlib import Path
 
-from Source.Logic import ActivationCode  # 动态覆盖其公钥
-from Source.Logic.LicenseManager  import VerifyAndGetKey, CreateLicense
+from Source.Logic import ActivationCode
 from Source.Logic.EncryptionUtils import DecryptBytes
+from Source.Logic.LicenseManager  import VerifyAndGetKey, CreateLicense
 
 PRODUCT_ID      = "__PRODUCT_ID__"
 PUBLIC_KEY_PEM  = """__PUBLIC_KEY__"""
-
-# 覆盖 ActivationCode 中的公钥
 ActivationCode._PUBLIC_KEY_PEM = PUBLIC_KEY_PEM
 
-def _InputLoop():
+
+def prompt_activation_code() -> str | None:
+    """优先用控制台；无控制台时弹 TK 对话框"""
+    # 1) 尝试 stdin
+    try:
+        if sys.stdin and sys.stdin.isatty():
+            return input("请输入激活码：").strip()
+    except Exception:
+        pass
+
+    # 2) 弹窗（tkinter）
+    try:
+        import tkinter as tk
+        from tkinter import simpledialog
+        root = tk.Tk()
+        root.withdraw()
+        code = simpledialog.askstring("激活", "请输入激活码：")
+        root.destroy()
+        return code.strip() if code else None
+    except Exception:
+        return None
+
+
+def _first_activation():
     while True:
+        code = prompt_activation_code()
+        if not code:
+            continue
         try:
-            code = input("请输入激活码：").strip()
             seed, prod = ActivationCode.Validate(code)
             if prod != PRODUCT_ID:
-                print("× 激活码不匹配此软件")
-                continue
+                raise ValueError("激活码与本软件不匹配")
             CreateLicense(seed, PRODUCT_ID)
-            print("✓ 激活成功")
             return
         except Exception as e:
-            print(f"× {e}")
+            # 控制台或 MessageBox 输出
+            try:
+                import tkinter.messagebox as mb
+                mb.showerror("激活失败", str(e))
+            except Exception:
+                print("×", e)
+
 
 def main():
     try:
         try:
             userKey = VerifyAndGetKey(PRODUCT_ID)
         except FileNotFoundError:
-            _InputLoop()
+            _first_activation()
             userKey = VerifyAndGetKey(PRODUCT_ID)
 
-        data = importlib.resources.read_binary(__package__ or "Assets", "encrypted_payload.dat")
-        payload = DecryptBytes(data, userKey)
+        blob = importlib.resources.read_binary(__package__ or "Assets", "encrypted_payload.dat")
+        payload = DecryptBytes(blob, userKey)
 
-        tmpExe = Path(tempfile.mkdtemp()) / "payload.exe"
-        tmpExe.write_bytes(payload)
-        subprocess.run([str(tmpExe)], check=False)
+        tmpDir = Path(tempfile.mkdtemp())
+        ext = ".exe" if payload[:2] == b"MZ" else ".py"
+        outFile = tmpDir / f"payload{ext}"
+        outFile.write_bytes(payload)
+
+        if ext == ".exe":
+            subprocess.run([str(outFile)], check=False)
+        else:
+            subprocess.run([sys.executable, str(outFile)], check=False)
 
     except Exception:
         traceback.print_exc()
-        input("Press Enter to exit …")
+        try:
+            import tkinter.messagebox as mb
+            mb.showerror("错误", traceback.format_exc())
+        except Exception:
+            input("Press <Enter> to exit …")
+
 
 if __name__ == "__main__":
     main()
