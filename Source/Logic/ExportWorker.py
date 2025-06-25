@@ -1,16 +1,17 @@
 """
-真正加壳工作线程
+批量加壳 & 打包单文件 exe（含 ProductId、激活码）
 """
-import threading
+import hashlib, shutil, subprocess, sys, tempfile, time, threading
 from pathlib import Path
 from typing import Callable, List
 
-from Crypto.Hash import SHA256
-
 from .TargetEntry import TargetEntry
-from .EncryptionUtils import DeriveUserKey, EncryptFile
+from .EncryptionUtils import EncryptFile, DeriveUserKey
 from .ActivationCode import Generate
 
+# ------------------------------ #
+RUNNER_TEMPLATE = Path("PayloadRunner.py")   # 固定模板
+# ------------------------------ #
 
 class ExportWorker(threading.Thread):
     def __init__(
@@ -18,49 +19,76 @@ class ExportWorker(threading.Thread):
             targets: List[TargetEntry],
             exportDir: Path,
             logFunc: Callable[[str], None],
-            finishedCallback: Callable[[bool], None],
+            finishedCb: Callable[[bool], None],
     ):
         super().__init__(daemon=True)
         self.Targets = targets
         self.ExportDir = exportDir
         self.Log = logFunc
-        self.OnFinished = finishedCallback
+        self.OnFinished = finishedCb
         self.InterruptFlag = False
 
+    # ---------- 主流程 ----------
     def run(self):
         interrupted = False
-        for t in self.Targets:
-            if self.InterruptFlag:
-                interrupted = True
-                break
-            if not t.Path:
-                self.Log(f"⛔ 跳过 {t.Name}（未选择文件）")
-                continue
+        tmpRoot = Path(tempfile.mkdtemp(prefix="psentinel_"))
+        try:
+            for t in self.Targets:
+                if self.InterruptFlag:
+                    interrupted = True
+                    break
+                if not t.Path:
+                    self.Log(f"⛔ 跳过 {t.Name}（未设置文件）")
+                    continue
+                src = Path(t.Path)
+                if not src.exists():
+                    self.Log(f"❌ 找不到文件：{src}")
+                    continue
 
-            srcPath = Path(t.Path)
-            if not srcPath.exists():
-                self.Log(f"❌ 找不到文件：{srcPath}")
-                continue
+                # 1) 生成 ProductId（12 hex）
+                productId = hashlib.sha256(
+                    f"{src.stat().st_mtime_ns}{time.time_ns()}".encode()
+                ).hexdigest()[:12]
 
-            self.Log(f"开始加壳：{t.Name}")
-            # 1. 生成激活码 (含随机 seed)
-            try:
-                activationCode, seed = Generate(t.Minutes)
-            except Exception as exc:
-                self.Log(f"❌ 生成激活码失败：{exc}")
-                continue
+                # 2) 生成激活码 & seed
+                try:
+                    activation, seed = Generate(t.Minutes, productId)
+                except Exception as e:
+                    self.Log(f"❌ 生成激活码失败：{e}")
+                    continue
 
-            # 2. 推导 UserKey 并加密
-            userKey = DeriveUserKey(seed)               # 目前仅 seed，未加 Fingerprint
-            outFile = self.ExportDir / f"{srcPath.stem}_encrypted.dat"
-            try:
-                EncryptFile(srcPath, userKey, outFile)
-            except Exception as exc:
-                self.Log(f"❌ 加密失败：{exc}")
-                continue
+                # 3) AES-GCM 加密载荷 -> tmp/encrypted_payload.dat
+                encTmp = tmpRoot / "encrypted_payload.dat"
+                EncryptFile(src, DeriveUserKey(seed), encTmp)
 
-            self.Log(f"✅ 完成 → {outFile}")
-            self.Log(f"激活码：{activationCode}\n")
+                # 4) 复制 Runner 模板 & 注入 ProductId
+                runnerTmp = tmpRoot / f"Runner_{productId}.py"
+                runnerCode = RUNNER_TEMPLATE.read_text(encoding="utf-8")
+                runnerCode = runnerCode.replace("__PRODUCT_ID__", productId)
+                runnerTmp.write_text(runnerCode, encoding="utf-8")
+
+                # 5) PyInstaller 单文件
+                outExe = self.ExportDir / f"{t.Name}.exe"
+                cmd = [
+                    sys.executable, "-m", "PyInstaller", "-F", str(runnerTmp),
+                    "--add-data", f"{encTmp};Assets",
+                    "--name", outExe.stem,
+                    "--distpath", str(self.ExportDir),
+                    "--workpath", str(tmpRoot / "build"),
+                    "--specpath", str(tmpRoot / "spec"),
+                    "--noconsole"
+                ]
+                self.Log(f"🔧 PyInstaller {t.Name} …")
+                proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                if proc.returncode != 0:
+                    self.Log(f"❌ 打包失败：\n{proc.stdout}")
+                    continue
+
+                self.Log(f"✅ 完成 → {outExe}")
+                self.Log(f"激活码：{activation}\n")
+
+        finally:
+            shutil.rmtree(tmpRoot, ignore_errors=True)
 
         if interrupted:
             self.Log("⚠ 导出被用户中断")
