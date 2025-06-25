@@ -5,7 +5,7 @@ import hashlib, shutil, subprocess, sys, tempfile, time, threading
 from pathlib import Path
 from typing import Callable, List
 
-from Crypto.PublicKey import RSA
+from Cryptodome.PublicKey import RSA
 
 from .TargetEntry import TargetEntry
 from .EncryptionUtils import EncryptFile, DeriveUserKey

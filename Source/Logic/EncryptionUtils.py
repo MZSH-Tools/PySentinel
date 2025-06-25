@@ -2,9 +2,9 @@
 AES-GCM 加/解工具
 """
 from pathlib import Path
-from Crypto.Cipher import AES
-from Crypto.Random import get_random_bytes
-from Crypto.Hash import SHA256
+from Cryptodome.Cipher import AES
+from Cryptodome.Random import get_random_bytes
+from Cryptodome.Hash import SHA256
 
 _NONCE_LEN = 12      # 推荐 12 字节
 _TAG_LEN = 16        # GCM 默认 16 字节

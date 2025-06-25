@@ -7,10 +7,10 @@ from __future__ import annotations
 import base64, json, time
 from typing import Tuple
 
-from Crypto.PublicKey import RSA
-from Crypto.Signature import pss
-from Crypto.Hash import SHA256
-from Crypto.Random import get_random_bytes
+from Cryptodome.PublicKey import RSA
+from Cryptodome.Signature import pss
+from Cryptodome.Hash import SHA256
+from Cryptodome.Random import get_random_bytes
 
 _PUBLIC_KEY_PEM = "__PUBLIC_KEY__"    # ← Builder 会替换
 
