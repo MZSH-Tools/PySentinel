@@ -192,9 +192,15 @@ class MainWindow(QWidget):
         if self.ExportWorker:            # 打断导出
             self.ExportWorker.Interrupt()
             return
+
         exportDir = self.LineEditExport.text().strip()
-        targets   = [self.TargetList.item(i).data(Qt.UserRole)
-                     for i in range(self.TargetList.count())]
+        # ★ 只取选中的条目
+        selectedItems = self.TargetList.selectedItems()
+        if not selectedItems:
+            QMessageBox.information(self, "提示", "请在列表中选择要导出的目标")
+            return
+        targets = [item.data(Qt.UserRole) for item in selectedItems]
+
         self.BtnExport.setText("打断导出")
         self.ExportWorker = ExportWorker(targets, Path(exportDir), self.Log, self.ExportFinished)
         self.ExportWorker.start()

@@ -4,9 +4,9 @@
 from __future__ import annotations
 import base64, json, time
 from pathlib import Path
-from Crypto.Cipher import AES
-from Crypto.Hash import SHA256
-from Crypto.Random import get_random_bytes
+from Cryptodome.Cipher import AES
+from Cryptodome.Hash import SHA256
+from Cryptodome.Random import get_random_bytes
 
 from .Fingerprint import GetFingerprint
 from .EncryptionUtils import DeriveUserKey
