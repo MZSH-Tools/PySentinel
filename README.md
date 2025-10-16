@@ -14,10 +14,16 @@ pip install -r requirements.txt       # PySide6 + PyInstaller + pycryptodomex
 
 ## 1. 生成开发者 GUI（可选）
 
+### 方式一：使用 spec 文件（推荐）
 ```bash
 # 仅第一次或换电脑时操作
-pyinstaller -F -w Main.py --name PySentinelBuilder --add-data "Source;Source"
+pyinstaller PySentinelBuilder.spec
 # dist/PySentinelBuilder.exe 即是加壳工具
+```
+
+### 方式二：使用命令行
+```bash
+pyinstaller -F -w Main.py --name PySentinelBuilder --add-data "Source;Source"
 ```
 
 > 也可以直接 `python Main.py` 运行，不必打包。
@@ -65,12 +71,14 @@ pyinstaller -F -w Main.py --name PySentinelBuilder --add-data "Source;Source"
 
 ```
 PySentinel/
-├─ Main.py                # Builder GUI
-├─ PayloadRunner.py       # 壳模板（带占位符）
+├─ Main.py                      # Builder GUI
+├─ PayloadRunner.py             # 壳模板（带占位符）
+├─ PySentinelBuilder.spec       # PyInstaller 配置文件
 ├─ Source/
-│   ├─ UI/…               # 界面层
-│   └─ Logic/…            # 加密/激活/许可证/指纹
-└─ requirements.txt
+│   ├─ UI/…                     # 界面层
+│   └─ Logic/…                  # 加密/激活/许可证/指纹
+├─ requirements.txt
+└─ environment.yml
 ```
 
 ---
